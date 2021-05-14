@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Logging;
 
 namespace MemoryLeak.Controllers
 {
@@ -14,25 +15,69 @@ namespace MemoryLeak.Controllers
     [ApiController]
     public class ApiController : ControllerBase
     {
-        public ApiController()
+        private readonly ILogger _logger;
+
+        public ApiController(ILogger<ApiController> logger)
         {
+            _logger = logger;
+
             Interlocked.Increment(ref DiagnosticsController.Requests);
         }
 
         private static readonly ConcurrentBag<string> s_staticStrings = new();
-
-        [HttpGet("staticstring")]
-        public ActionResult<string> GetStaticString()
-        {
-            var bigString = new string('x', 10 * 1024);
-            s_staticStrings.Add(bigString);
-            return bigString;
-        }
+        private static readonly WeakReference<ConcurrentBag<string>> s_weakStrings = new(new ConcurrentBag<string>());
 
         [HttpGet("bigstring")]
         public ActionResult<string> GetBigString()
         {
             return new string('x', 10 * 1024);
+        }
+
+        [HttpGet("bigstring-with-collect")]
+        public ActionResult<string> GetBigStringWithCollect()
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            return new string('x', 10 * 1024);
+        }
+
+        [ThreadStatic]
+        private static string t_bigString;
+
+        [HttpGet("bigstring-cached")]
+        public ActionResult<string> GetBigStringCached()
+        {
+            return t_bigString ??= new string('x', 10 * 1024);
+        }
+
+        [HttpGet("staticstring")]
+        public ActionResult<string> GetStaticString()
+        {
+            string bigString = new('x', 10 * 1024);
+            s_staticStrings.Add(bigString);
+            return bigString;
+        }
+
+        [HttpGet("weakstring")]
+        public ActionResult<string> GetWeakString()
+        {
+            string bigString = new('x', 10 * 1024);
+
+            if (!s_weakStrings.TryGetTarget(out ConcurrentBag<string> strings))
+            {
+                _logger.LogInformation("WeakStrings got collected, creating new bag");
+
+                lock (s_weakStrings)
+                {
+                    strings = new ConcurrentBag<string>();
+                    s_weakStrings.SetTarget(strings);
+                }
+            }
+
+            strings.Add(bigString);
+            return bigString;
         }
 
         [HttpGet("loh/{size=85000}")]
@@ -86,12 +131,12 @@ namespace MemoryLeak.Controllers
 
             public PooledArray(int size)
             {
-                Array = s_arrayPool.Rent(size);
+                this.Array = s_arrayPool.Rent(size);
             }
 
             public void Dispose()
             {
-                s_arrayPool.Return(Array);
+                s_arrayPool.Return(this.Array);
             }
         }
 
@@ -103,7 +148,7 @@ namespace MemoryLeak.Controllers
             var random = new Random();
             random.NextBytes(pooledArray.Array);
 
-            HttpContext.Response.RegisterForDispose(pooledArray);
+            this.HttpContext.Response.RegisterForDispose(pooledArray);
 
             return pooledArray.Array;
         }

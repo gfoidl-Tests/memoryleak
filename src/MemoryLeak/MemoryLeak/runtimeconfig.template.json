@@ -1,0 +1,6 @@
+{
+    "configProperties": {
+        "System.GC.LOHThreshold": 135000
+        //"System.GC.HeapHardLimit": 1073741824   // 1 GiB
+    }
+}
