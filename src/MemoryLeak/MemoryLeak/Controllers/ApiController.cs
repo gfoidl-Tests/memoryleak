@@ -1,12 +1,12 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.FileProviders;
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.FileProviders;
 
 namespace MemoryLeak.Controllers
 {
@@ -19,20 +19,20 @@ namespace MemoryLeak.Controllers
             Interlocked.Increment(ref DiagnosticsController.Requests);
         }
 
-        private static ConcurrentBag<string> _staticStrings = new ConcurrentBag<string>();
+        private static readonly ConcurrentBag<string> s_staticStrings = new();
 
         [HttpGet("staticstring")]
         public ActionResult<string> GetStaticString()
         {
-            var bigString = new String('x', 10 * 1024);
-            _staticStrings.Add(bigString);
+            var bigString = new string('x', 10 * 1024);
+            s_staticStrings.Add(bigString);
             return bigString;
         }
 
         [HttpGet("bigstring")]
         public ActionResult<string> GetBigString()
         {
-            return new String('x', 10 * 1024);
+            return new string('x', 10 * 1024);
         }
 
         [HttpGet("loh/{size=85000}")]
@@ -41,31 +41,29 @@ namespace MemoryLeak.Controllers
             return new byte[size].Length;
         }
 
-        private static readonly string TempPath = Path.GetTempPath();
+        private static readonly string s_tempPath = Path.GetTempPath();
 
         [HttpGet("fileprovider")]
         public void GetFileProvider()
         {
-            var fp = new PhysicalFileProvider(TempPath);
+            var fp = new PhysicalFileProvider(s_tempPath);
             fp.Watch("*.*");
         }
 
         [HttpGet("httpclient1")]
         public async Task<int> GetHttpClient1(string url)
         {
-            using (var httpClient = new HttpClient())
-            {
-                var result = await httpClient.GetAsync(url);
-                return (int)result.StatusCode;
-            }
+            using var httpClient = new HttpClient();
+            var result = await httpClient.GetAsync(url);
+            return (int)result.StatusCode;
         }
 
-        private static readonly HttpClient _httpClient = new HttpClient();
+        private static readonly HttpClient s_httpClient = new();
 
         [HttpGet("httpclient2")]
         public async Task<int> GetHttpClient2(string url)
         {
-            var result = await _httpClient.GetAsync(url);
+            var result = await s_httpClient.GetAsync(url);
             return (int)result.StatusCode;
         }
 
@@ -80,20 +78,20 @@ namespace MemoryLeak.Controllers
             return array;
         }
 
-        private static ArrayPool<byte> _arrayPool = ArrayPool<byte>.Create();
+        private static readonly ArrayPool<byte> s_arrayPool = ArrayPool<byte>.Create();
 
         private class PooledArray : IDisposable
         {
-            public byte[] Array { get; private set; }
+            public byte[] Array { get; }
 
             public PooledArray(int size)
             {
-                Array = _arrayPool.Rent(size);
+                Array = s_arrayPool.Rent(size);
             }
 
             public void Dispose()
             {
-                _arrayPool.Return(Array);
+                s_arrayPool.Return(Array);
             }
         }
 
@@ -109,6 +107,5 @@ namespace MemoryLeak.Controllers
 
             return pooledArray.Array;
         }
-
     }
 }

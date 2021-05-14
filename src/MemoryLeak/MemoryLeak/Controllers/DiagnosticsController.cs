@@ -1,22 +1,27 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using System;
+﻿using System;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
+using System.Runtime;
 using System.Threading;
+using Microsoft.AspNetCore.Mvc;
 
 namespace MemoryLeak.Controllers
 {
+    public static class GlobalGC
+    {
+        public static string GC = GCSettings.IsServerGC ? "Server" : "Workstation";
+    }
+
     [Route("api")]
     [ApiController]
     public class DiagnosticsController : ControllerBase
     {
-        private static Process _process = Process.GetCurrentProcess();
-        private static TimeSpan _oldCPUTime = TimeSpan.Zero;
-        private static DateTime _lastMonitorTime = DateTime.UtcNow;
-        private static DateTime _lastRpsTime = DateTime.UtcNow;
-        private static double _cpu = 0, _rps = 0;
-        private static readonly double RefreshRate = TimeSpan.FromSeconds(1).TotalMilliseconds;
-        public static long Requests = 0;
+        private static readonly Process s_process = Process.GetCurrentProcess();
+        private static TimeSpan s_oldCPUTime = TimeSpan.Zero;
+        private static DateTime s_lastMonitorTime = DateTime.UtcNow;
+        private static DateTime s_lastRpsTime = DateTime.UtcNow;
+        private static double s_cpu, s_rps;
+        private static readonly double s_refreshRate = TimeSpan.FromSeconds(1).TotalMilliseconds;
+        public static long Requests;
 
         [HttpGet("collect")]
         public ActionResult GetCollect()
@@ -32,42 +37,41 @@ namespace MemoryLeak.Controllers
         public ActionResult GetDiagnostics()
         {
             var now = DateTime.UtcNow;
-            _process.Refresh();
+            s_process.Refresh();
 
-            var cpuElapsedTime = now.Subtract(_lastMonitorTime).TotalMilliseconds;
+            var cpuElapsedTime = now.Subtract(s_lastMonitorTime).TotalMilliseconds;
 
-            if (cpuElapsedTime > RefreshRate)
+            if (cpuElapsedTime > s_refreshRate)
             {
-                var newCPUTime = _process.TotalProcessorTime;
-                var elapsedCPU = (newCPUTime - _oldCPUTime).TotalMilliseconds;
-                _cpu = elapsedCPU * 100 / Environment.ProcessorCount / cpuElapsedTime;
+                var newCPUTime = s_process.TotalProcessorTime;
+                var elapsedCPU = (newCPUTime - s_oldCPUTime).TotalMilliseconds;
+                s_cpu = elapsedCPU * 100 / Environment.ProcessorCount / cpuElapsedTime;
 
-                _lastMonitorTime = now;
-                _oldCPUTime = newCPUTime;
+                s_lastMonitorTime = now;
+                s_oldCPUTime = newCPUTime;
             }
 
-            var rpsElapsedTime = now.Subtract(_lastRpsTime).TotalMilliseconds;
-            if (rpsElapsedTime > RefreshRate)
+            var rpsElapsedTime = now.Subtract(s_lastRpsTime).TotalMilliseconds;
+            if (rpsElapsedTime > s_refreshRate)
             {
-                _rps = Requests * 1000 / rpsElapsedTime;
-                Interlocked.Exchange(ref Requests, 0);
-                _lastRpsTime = now;
+                s_rps = Interlocked.Exchange(ref Requests, 0) * 1000 / rpsElapsedTime;
+                s_lastRpsTime = now;
             }
 
             var diagnostics = new
             {
-                PID = _process.Id,
+                PID = s_process.Id,
 
                 // The memory occupied by objects.
                 Allocated = GC.GetTotalMemory(false),
 
                 // The working set includes both shared and private data. The shared data includes the pages that contain all the 
                 // instructions that the process executes, including instructions in the process modules and the system libraries.
-                WorkingSet = _process.WorkingSet64,
+                WorkingSet = s_process.WorkingSet64,
 
                 // The value returned by this property represents the current size of memory used by the process, in bytes, that 
                 // cannot be shared with other processes.
-                PrivateBytes = _process.PrivateMemorySize64,
+                PrivateBytes = s_process.PrivateMemorySize64,
 
                 // The number of generation 0 collections
                 Gen0 = GC.CollectionCount(0),
@@ -78,9 +82,9 @@ namespace MemoryLeak.Controllers
                 // The number of generation 2 collections
                 Gen2 = GC.CollectionCount(2),
 
-                CPU = _cpu,
+                CPU = s_cpu,
 
-                RPS = _rps
+                RPS = s_rps
             };
 
             return new ObjectResult(diagnostics);
